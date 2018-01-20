@@ -15,6 +15,14 @@ void send_vd(int fd);
 void send_s(int fd);
 void print_usage_exit(void);
 
+/* These are per the "Data format" section of the Full Manual. */
+const unsigned char PREAMBLE    = 0xFE;
+const unsigned char XCVR_ADDR   = 0x94; /* Transceiver's default address */
+const unsigned char CONT_ADDR   = 0xE0; /* Controller's default address */
+const unsigned char OK_CODE     = 0xFB;
+const unsigned char NG_CODE     = 0xFA;
+const unsigned char END_MESSAGE = 0xFD;
+
 int main(int argc, char **argv)
 {
     struct termios tio_orig;
@@ -156,13 +164,13 @@ void send_on(int fd)
     int n;
 
     for(n = 0; n < 200; n++)
-        buf[n] = 0xFE;
+        buf[n] = PREAMBLE;
 
-    buf[n++] = 0x94; 
-    buf[n++] = 0xE0;
+    buf[n++] = XCVR_ADDR; 
+    buf[n++] = CONT_ADDR;
     buf[n++] = 0x18;
     buf[n++] = 0x01;
-    buf[n++] = 0xFD;
+    buf[n++] = END_MESSAGE;
 
     nbytes = write(fd, buf, n);
     printf("send_on: sent %d of %d bytes.\n", nbytes, n);
@@ -173,6 +181,12 @@ void send_on(int fd)
         printf(" %02X", buf[n]);
     }
     putchar('\n');
+
+    // Check for correct response.
+    puts( (CONT_ADDR   == buf[nbytes - 4] &&
+           XCVR_ADDR   == buf[nbytes - 3] &&
+           OK_CODE     == buf[nbytes - 2] &&
+           END_MESSAGE == buf[nbytes - 1]) ? "OK" : "No Good");
 }
 
 void send_off(int fd)
@@ -182,12 +196,12 @@ void send_off(int fd)
     int n;
 
     n = 0;
-    buf[n++] = 0xFE; 
-    buf[n++] = 0x94; 
-    buf[n++] = 0xE0;
+    buf[n++] = PREAMBLE; 
+    buf[n++] = XCVR_ADDR; 
+    buf[n++] = CONT_ADDR;
     buf[n++] = 0x18;
     buf[n++] = 0x00;
-    buf[n++] = 0xFD;
+    buf[n++] = END_MESSAGE;
 
     nbytes = write(fd, buf, n);
     printf("send_off: sent %d of %d bytes.\n", nbytes, n);
@@ -198,6 +212,12 @@ void send_off(int fd)
         printf(" %02X", buf[n]);
     }
     putchar('\n');
+
+    // Check for correct response.
+    puts( (CONT_ADDR   == buf[nbytes - 4] &&
+           XCVR_ADDR   == buf[nbytes - 3] &&
+           OK_CODE     == buf[nbytes - 2] &&
+           END_MESSAGE == buf[nbytes - 1]) ? "OK" : "No Good");
 }
 
 void send_vd(int fd)
@@ -205,14 +225,16 @@ void send_vd(int fd)
     unsigned char buf[20];
     int nbytes;
     int n;
+    int counts;
+    float volts;
 
     n = 0;
-    buf[n++] = 0xFE; 
-    buf[n++] = 0x94; 
-    buf[n++] = 0xE0;
+    buf[n++] = PREAMBLE; 
+    buf[n++] = XCVR_ADDR; 
+    buf[n++] = CONT_ADDR;
     buf[n++] = 0x15;
     buf[n++] = 0x15;
-    buf[n++] = 0xFD;
+    buf[n++] = END_MESSAGE;
 
     nbytes = write(fd, buf, n);
     printf("send_vd: sent %d of %d bytes.\n", nbytes, n);
@@ -223,6 +245,33 @@ void send_vd(int fd)
         printf(" %02X", buf[n]);
     }
     putchar('\n');
+
+    // Check for correctly formatted response.
+    if(CONT_ADDR   == buf[nbytes - 7] &&
+       XCVR_ADDR   == buf[nbytes - 6] &&
+       0x15        == buf[nbytes - 5] &&
+       0x15        == buf[nbytes - 4] &&
+       END_MESSAGE == buf[nbytes - 1])
+    {
+        // Response appears correct. counts is two bytes preceeding END_MESSAGE.
+        // It is BCD.
+        unsigned char bh, bl;
+
+        bh = buf[nbytes - 3];
+        bl = buf[nbytes - 2];
+
+        // Convert from BCD.
+        counts = (bh >> 4) * 1000 + (bh & 0x0F) * 100 + (bl >> 4) * 10 + (bl & 0x0F);
+
+        // Per IC-7300 Full Manual, there seems to be a discontinuity in scaling.
+        // Read Vd meter level *(0000=0 V, 0013=10 V, 0241=16 V)
+        if(counts < 13)
+            volts = 10.0 * counts / 13.0;
+        else
+            volts = ((16.0 - 10.0) * counts / (241.0 - 13.0)) + 10.0;
+
+        printf("counts = %d, volts = %.2f\n", counts, volts);
+    }
 }
 
 void send_s(int fd)
@@ -230,14 +279,15 @@ void send_s(int fd)
     unsigned char buf[20];
     int nbytes;
     int n;
+    int counts;
 
     n = 0;
-    buf[n++] = 0xFE; 
-    buf[n++] = 0x94; 
-    buf[n++] = 0xE0;
+    buf[n++] = PREAMBLE; 
+    buf[n++] = XCVR_ADDR; 
+    buf[n++] = CONT_ADDR;
     buf[n++] = 0x15;
     buf[n++] = 0x02;
-    buf[n++] = 0xFD;
+    buf[n++] = END_MESSAGE;
 
     nbytes = write(fd, buf, n);
     printf("send_s: sent %d of %d bytes.\n", nbytes, n);
@@ -248,6 +298,40 @@ void send_s(int fd)
         printf(" %02X", buf[n]);
     }
     putchar('\n');
+
+    // Check for correctly formatted response.
+    if(CONT_ADDR   == buf[nbytes - 7] &&
+       XCVR_ADDR   == buf[nbytes - 6] &&
+       0x15        == buf[nbytes - 5] &&
+       0x02        == buf[nbytes - 4] &&
+       END_MESSAGE == buf[nbytes - 1])
+    {
+        // Response appears correct. counts is two bytes preceeding END_MESSAGE.
+        // It is BCD.
+        unsigned char bh, bl;
+        unsigned char s, db;
+
+        bh = buf[nbytes - 3];
+        bl = buf[nbytes - 2];
+
+        // Convert from BCD.
+        counts = (bh >> 4) * 1000 + (bh & 0x0F) * 100 + (bl >> 4) * 10 + (bl & 0x0F);
+
+        // Per IC-7300 Full Manual, there seems to be a discontinuity in scaling.
+        // Read S-meter level *(0000=S0, 0120=S9, 0241=S9+60dB)
+        if(counts < 120) {
+            s = (unsigned char)(0.5 + 9.0 * counts / 120.0);
+            db = 0;
+        } else {
+            s = 9;
+            db = (unsigned char)(0.5 + 60.0 * (counts - 120) / (241.0 - 120.0));
+        }
+
+        if(db)
+            printf("counts = %d, S = S%d+%ddB\n", counts, s, db);
+        else
+            printf("counts = %d, S = S%d\n", counts, s);
+    }
 }
 
 void print_usage_exit(void)
