@@ -361,7 +361,7 @@ void send_date_time(int fd)
         exit(1);
     }
 
-    if(0 == strftime(time_str, sizeof time_str, "%Y%m%d", ptm)) {
+    if(0 == strftime(time_str, sizeof time_str, "%H%M%d", ptm)) {
         puts("send_date_time: error formatting time.");
         exit(1);
     }
@@ -375,6 +375,7 @@ void send_date_time(int fd)
     buf[n++] = 0x05;
     buf[n++] = 0x00;
     buf[n++] = 0x94;
+    /* Convert string to BCD. */
     buf[n++] = (date_str[0] << 4) + (0x0F & date_str[1]);
     buf[n++] = (date_str[2] << 4) + (0x0F & date_str[3]);
     buf[n++] = (date_str[4] << 4) + (0x0F & date_str[5]);
@@ -410,6 +411,7 @@ void send_date_time(int fd)
     buf[n++] = 0x05;
     buf[n++] = 0x00;
     buf[n++] = 0x95;
+    /* Convert string to BCD. */
     buf[n++] = (time_str[0] << 4) + (0x0F & time_str[1]);
     buf[n++] = (time_str[2] << 4) + (0x0F & time_str[3]);
     buf[n++] = END_MESSAGE;
