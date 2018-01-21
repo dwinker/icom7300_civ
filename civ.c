@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <getopt.h>
+#include <time.h>
 #include <fcntl.h>  /* File Control Definitions          */
 #include <termios.h>/* POSIX Terminal Control Definitions*/
 #include <unistd.h> /* UNIX Standard Definitions         */
@@ -13,6 +14,7 @@ void send_on(int fd);
 void send_off(int fd);
 void send_vd(int fd);
 void send_s(int fd);
+void send_date_time(int fd);
 void print_usage_exit(void);
 
 /* These are per the "Data format" section of the Full Manual. */
@@ -34,6 +36,7 @@ int main(int argc, char **argv)
     int off_flag = 0;
     int vd_flag  = 0;
     int s_flag   = 0;
+    int dt_flag  = 0;
 
     static const struct option long_options[] =
     {
@@ -76,8 +79,10 @@ int main(int argc, char **argv)
             off_flag = 1;
         } else if(0 == strcmp("vd", argv[optind])) {
             vd_flag  = 1;
-        } else if(0 == strcmp("s", argv[optind])) {
+        } else if(0 == strcmp("s",  argv[optind])) {
             s_flag   = 1;
+        } else if(0 == strcmp("dt", argv[optind])) {
+            dt_flag   = 1;
         } else {
             print_usage_exit();
         }
@@ -112,6 +117,8 @@ int main(int argc, char **argv)
             send_vd(fd);
         if(s_flag)
             send_s(fd);
+        if(dt_flag)
+            send_date_time(fd);
     }
 
     rc = tcsetattr(fd, TCSADRAIN, &tio_orig);
@@ -137,7 +144,7 @@ void init_serial(int fd, struct termios *ptio)
     cfmakeraw(ptio);
 
     // Number of Stop bits = 1, so we clear the CSTOPB bit.
-    ptio->c_cflag &= ~CSTOPB; //Stop bits = 1 
+    ptio->c_cflag &= ~CSTOPB; //Stop bits = 1
 
     // Turn off hardware based flow control (RTS/CTS).
     ptio->c_cflag &= ~CRTSCTS;
@@ -166,7 +173,7 @@ void send_on(int fd)
     for(n = 0; n < 200; n++)
         buf[n] = PREAMBLE;
 
-    buf[n++] = XCVR_ADDR; 
+    buf[n++] = XCVR_ADDR;
     buf[n++] = CONT_ADDR;
     buf[n++] = 0x18;
     buf[n++] = 0x01;
@@ -196,8 +203,8 @@ void send_off(int fd)
     int n;
 
     n = 0;
-    buf[n++] = PREAMBLE; 
-    buf[n++] = XCVR_ADDR; 
+    buf[n++] = PREAMBLE;
+    buf[n++] = XCVR_ADDR;
     buf[n++] = CONT_ADDR;
     buf[n++] = 0x18;
     buf[n++] = 0x00;
@@ -229,8 +236,8 @@ void send_vd(int fd)
     float volts;
 
     n = 0;
-    buf[n++] = PREAMBLE; 
-    buf[n++] = XCVR_ADDR; 
+    buf[n++] = PREAMBLE;
+    buf[n++] = XCVR_ADDR;
     buf[n++] = CONT_ADDR;
     buf[n++] = 0x15;
     buf[n++] = 0x15;
@@ -282,8 +289,8 @@ void send_s(int fd)
     int counts;
 
     n = 0;
-    buf[n++] = PREAMBLE; 
-    buf[n++] = XCVR_ADDR; 
+    buf[n++] = PREAMBLE;
+    buf[n++] = XCVR_ADDR;
     buf[n++] = CONT_ADDR;
     buf[n++] = 0x15;
     buf[n++] = 0x02;
@@ -334,11 +341,106 @@ void send_s(int fd)
     }
 }
 
+void send_date_time(int fd)
+{
+    unsigned char buf[20];
+    int nbytes;
+    int n;
+    int counts;
+    time_t t;
+    struct tm *ptm;
+    char date_str[9];
+    char time_str[20];
+
+    time(&t);
+    ptm = gmtime(&t);
+    printf("UTC: %s", asctime(ptm));
+
+    if(0 == strftime(date_str, sizeof date_str, "%Y%m%d", ptm)) {
+        puts("send_date_time: error formatting date.");
+        exit(1);
+    }
+
+    if(0 == strftime(time_str, sizeof time_str, "%Y%m%d", ptm)) {
+        puts("send_date_time: error formatting time.");
+        exit(1);
+    }
+
+    /* Send the date to the radio. */
+    n = 0;
+    buf[n++] = PREAMBLE;
+    buf[n++] = XCVR_ADDR;
+    buf[n++] = CONT_ADDR;
+    buf[n++] = 0x1A;
+    buf[n++] = 0x05;
+    buf[n++] = 0x00;
+    buf[n++] = 0x94;
+    buf[n++] = (date_str[0] << 4) + (0x0F & date_str[1]);
+    buf[n++] = (date_str[2] << 4) + (0x0F & date_str[3]);
+    buf[n++] = (date_str[4] << 4) + (0x0F & date_str[5]);
+    buf[n++] = (date_str[6] << 4) + (0x0F & date_str[7]);
+    buf[n++] = END_MESSAGE;
+
+    nbytes = write(fd, buf, n);
+    printf("send_date_time: send %2d bytes:", nbytes);
+    for(n = 0; n < nbytes; n++) {
+        printf(" %02X", buf[n]);
+    }
+    putchar('\n');
+
+    nbytes = read(fd, buf, sizeof(buf));
+    printf("send_date_time: read %2d bytes:", nbytes);
+    for(n = 0; n < nbytes; n++) {
+        printf(" %02X", buf[n]);
+    }
+    putchar('\n');
+
+    // Check for correct response.
+    puts( (CONT_ADDR   == buf[nbytes - 4] &&
+           XCVR_ADDR   == buf[nbytes - 3] &&
+           OK_CODE     == buf[nbytes - 2] &&
+           END_MESSAGE == buf[nbytes - 1]) ? "OK" : "No Good");
+
+    /* Send the time to the radio. */
+    n = 0;
+    buf[n++] = PREAMBLE;
+    buf[n++] = XCVR_ADDR;
+    buf[n++] = CONT_ADDR;
+    buf[n++] = 0x1A;
+    buf[n++] = 0x05;
+    buf[n++] = 0x00;
+    buf[n++] = 0x95;
+    buf[n++] = (time_str[0] << 4) + (0x0F & time_str[1]);
+    buf[n++] = (time_str[2] << 4) + (0x0F & time_str[3]);
+    buf[n++] = END_MESSAGE;
+
+    nbytes = write(fd, buf, n);
+    printf("send_date_time: send %2d bytes:", nbytes);
+    for(n = 0; n < nbytes; n++) {
+        printf(" %02X", buf[n]);
+    }
+    putchar('\n');
+
+    nbytes = read(fd, buf, sizeof(buf));
+    printf("send_date_time: read %2d bytes:", nbytes);
+    for(n = 0; n < nbytes; n++) {
+        printf(" %02X", buf[n]);
+    }
+    putchar('\n');
+
+    // Check for correct response.
+    puts( (CONT_ADDR   == buf[nbytes - 4] &&
+           XCVR_ADDR   == buf[nbytes - 3] &&
+           OK_CODE     == buf[nbytes - 2] &&
+           END_MESSAGE == buf[nbytes - 1]) ? "OK" : "No Good");
+
+}
+
 void print_usage_exit(void)
 {
-    puts("usage: civ [-d|--device /dev/ttyUSBx] [on|off|vd|s]");
+    puts("usage: civ [-d|--device /dev/ttyUSBx] [on|off|vd|s|dt]");
     puts("  default device is /dev/ttyUSB0, default command is on.");
-    puts("  vd reads battery voltage, s reads the S-Meter.");
-    puts("  Multiple commands can given, however only vd and s make sense together.");
+    puts("  vd reads battery voltage, s reads the S-Meter, dt sets UTC date and time.");
+    puts("  Multiple commands can given, however only vd, s, and dt make sense together.");
     exit(1);
 }

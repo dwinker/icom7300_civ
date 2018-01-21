@@ -1,7 +1,8 @@
 This little program turns my ICOM-7300 ham radio transciever on or off from the
 Linux PC it is connected to via the USB. It implements a few of the commands
 described in the full user manual. In addition to on and off it can be used to
-read Vd (the battery voltage) and the S-Meter.  This little program makes it
+read Vd (the battery voltage) and the S-Meter, and can set the UTC date and
+time on the radio from the PC date and time.  This little program makes it
 possible for me to remotely access the Linux PC, turn on my radio, play with
 fldigi/flrig, check the battery, and turn off the radio.
 
