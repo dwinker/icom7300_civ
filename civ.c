@@ -15,6 +15,16 @@ void send_off(int fd);
 void send_vd(int fd);
 void send_s(int fd);
 void send_date_time(int fd);
+void send_scope_limits(
+        int                fd,
+        const char * const band,
+        const char * const edge,
+        const char * const low_edge,
+        const char * const high_edge);
+void get_scope_limits(
+        int                fd,
+        const char * const band,
+        const char * const edge);
 void print_usage_exit(void);
 
 /* These are per the "Data format" section of the Full Manual. */
@@ -37,6 +47,11 @@ int main(int argc, char **argv)
     int vd_flag  = 0;
     int s_flag   = 0;
     int dt_flag  = 0;
+    int sl_flag  = 0;
+    const char *band      = NULL;
+    const char *edge      = NULL;
+    const char *low_edge  = NULL;
+    const char *high_edge = NULL;
 
     static const struct option long_options[] =
     {
@@ -83,6 +98,19 @@ int main(int argc, char **argv)
             s_flag   = 1;
         } else if(0 == strcmp("dt", argv[optind])) {
             dt_flag   = 1;
+        } else if(0 == strcmp("sl", argv[optind])) {
+            sl_flag = 1;
+            if(5 == (argc - optind)) {
+                band      = argv[++optind];
+                edge      = argv[++optind];
+                low_edge  = argv[++optind];
+                high_edge = argv[++optind];
+            } else if(3 == (argc - optind)) {
+                band      = argv[++optind];
+                edge      = argv[++optind];
+            } else {
+                print_usage_exit();
+            }
         } else {
             print_usage_exit();
         }
@@ -119,6 +147,11 @@ int main(int argc, char **argv)
             send_s(fd);
         if(dt_flag)
             send_date_time(fd);
+        if(sl_flag)
+            if(band && edge && low_edge && high_edge)
+                send_scope_limits(fd, band, edge, low_edge, high_edge);
+            else
+                get_scope_limits(fd, band, edge);
     }
 
     rc = tcsetattr(fd, TCSADRAIN, &tio_orig);
@@ -438,11 +471,190 @@ void send_date_time(int fd)
 
 }
 
+const struct band_to_subcmd_lookup_tag {
+    const char * const band;
+    unsigned char      edge_1_cmd;
+} BAND_TO_SUBCMD_LOOKUP[] = {
+    {".03", 112}, // edge 1 for  0.03 to  1.60 MHz
+    {"1.6", 115}, // edge 1 for  1.60 to  2.00 MHz
+    {"2",   118}, // edge 1 for  2.00 to  6.00 MHz
+    {"6",   121}, // edge 1 for  6.00 to  8.00 MHz
+    {"8",   124}, // edge 1 for  8.00 to 11.00 MHz
+    {"11",  127}, // edge 1 for 11.00 to 15.00 MHz
+    {"15",  130}, // edge 1 for 15.00 to 20.00 MHz
+    {"20",  133}, // edge 1 for 20.00 to 22.00 MHz
+    {"22",  136}, // edge 1 for 22.00 to 26.00 MHz
+    {"26",  139}, // edge 1 for 26.00 to 30.00 MHz
+    {"30",  142}, // edge 1 for 30.00 to 45.00 MHz
+    {"45",  145}, // edge 1 for 45.00 to 60.00 MHz
+    {"60",  148}  // edge 1 for 60.00 to 74.80 MHz
+};
+
+// From page 19-8 of IC-7300 FULL MANUAL. PARSE_BANDSCOPE_EDGE_FREQUENCY() will
+// convert the BCD encoded frequency into an unsigned long of frequency in Hz.
+#define BCD2UCHAR(x) (((x >> 4) * 10) + (x & 0x0F))
+#define PARSE_BANDSCOPE_EDGE_FREQUENCY(x1, x2, x3) \
+    (100ul*BCD2UCHAR(x1) + 10000ul*BCD2UCHAR(x2) + 1000000ul*BCD2UCHAR(x3))
+
+// No error checking.
+#define UCHAR2BCD(x) (((x / 10) << 4) + (x % 10))
+
+void send_scope_limits(
+        int                fd,
+        const char * const band,
+        const char * const edge,
+        const char * const low_edge,
+        const char * const high_edge)
+{
+    double low_f_mhz, high_f_mhz;
+    unsigned long low_100hz, high_100hz;
+    unsigned char buf[20];
+    unsigned char subcmd = 0;
+    unsigned char edgei  = 0;
+    int nbytes;
+    int n;
+
+    for(n = 0; n < sizeof(BAND_TO_SUBCMD_LOOKUP) / sizeof(BAND_TO_SUBCMD_LOOKUP[0]); n++) {
+        if(0 == strcmp(band, BAND_TO_SUBCMD_LOOKUP[n].band)) {
+            subcmd = BAND_TO_SUBCMD_LOOKUP[n].edge_1_cmd;
+            edgei = atoi(edge);
+            if(1 != edgei && 2 != edgei && 3 != edgei) {
+                printf("send_scope_limits: edge was %s, must be 1, 2 or 3.\n", edge);
+                print_usage_exit();
+            }
+            subcmd += (edgei - 1);
+            break;
+        }
+    }
+
+    if(!subcmd) {
+        printf("send_scope_limits: band %s not found.\n", band);
+        print_usage_exit();
+    }
+
+    low_f_mhz  = atof(low_edge);
+    high_f_mhz = atof(high_edge);
+    low_100hz  = (unsigned long)(low_f_mhz  * 1000000.0 / 100.0);
+    high_100hz = (unsigned long)(high_f_mhz * 1000000.0 / 100.0);
+
+    printf("send_scope_limits strings: \"%s\" \"%s\" \"%s\" \"%s\"\n", band, edge, low_edge, high_edge);
+    printf("send_scope_limits vars: %.4f %.4f %lu %lu\n", low_f_mhz, high_f_mhz, low_100hz, high_100hz);
+
+    /* Send the date to the radio. */
+    n = 0;
+    buf[n++] = PREAMBLE;
+    buf[n++] = XCVR_ADDR;
+    buf[n++] = CONT_ADDR;
+    buf[n++] = 0x1A;
+    buf[n++] = 0x05;
+    buf[n++] = UCHAR2BCD(subcmd / 100);
+    buf[n++] = UCHAR2BCD(subcmd % 100);
+    buf[n++] = UCHAR2BCD( low_100hz % 100);  low_100hz /= 100;
+    buf[n++] = UCHAR2BCD( low_100hz % 100);  low_100hz /= 100;
+    buf[n++] = UCHAR2BCD( low_100hz % 100);
+    buf[n++] = UCHAR2BCD(high_100hz % 100); high_100hz /= 100;
+    buf[n++] = UCHAR2BCD(high_100hz % 100); high_100hz /= 100;
+    buf[n++] = UCHAR2BCD(high_100hz % 100);
+    buf[n++] = END_MESSAGE;
+
+    nbytes = write(fd, buf, n);
+    printf("send_scope_limits: send %2d bytes:", nbytes);
+    for(n = 0; n < nbytes; n++) {
+        printf(" %02X", buf[n]);
+    }
+    putchar('\n');
+
+    nbytes = read(fd, buf, sizeof(buf));
+    printf("send_scope_limits: read %2d bytes:", nbytes);
+    for(n = 0; n < nbytes; n++) {
+        printf(" %02X", buf[n]);
+    }
+    putchar('\n');
+
+    // Check for correct response.
+    puts( (CONT_ADDR   == buf[nbytes - 4] &&
+           XCVR_ADDR   == buf[nbytes - 3] &&
+           OK_CODE     == buf[nbytes - 2] &&
+           END_MESSAGE == buf[nbytes - 1]) ? "OK" : "No Good");
+}
+
+void get_scope_limits(
+        int                fd,
+        const char * const band,
+        const char * const edge)
+{
+    unsigned char buf[20];
+    unsigned char subcmd = 0;
+    unsigned char edgei  = 0;
+    int nbytes;
+    int n;
+
+    for(n = 0; n < sizeof(BAND_TO_SUBCMD_LOOKUP) / sizeof(BAND_TO_SUBCMD_LOOKUP[0]); n++) {
+        if(0 == strcmp(band, BAND_TO_SUBCMD_LOOKUP[n].band)) {
+            subcmd = BAND_TO_SUBCMD_LOOKUP[n].edge_1_cmd;
+            edgei = atoi(edge);
+            if(1 != edgei && 2 != edgei && 3 != edgei) {
+                printf("get_scope_limits: edge was %s, must be 1, 2 or 3.\n", edge);
+                print_usage_exit();
+            }
+            subcmd += (edgei - 1);
+            break;
+        }
+    }
+
+    /* Send the date to the radio. */
+    n = 0;
+    buf[n++] = PREAMBLE;
+    buf[n++] = XCVR_ADDR;
+    buf[n++] = CONT_ADDR;
+    buf[n++] = 0x1A;
+    buf[n++] = 0x05;
+    buf[n++] = UCHAR2BCD(subcmd / 100);
+    buf[n++] = UCHAR2BCD(subcmd % 100);
+    buf[n++] = END_MESSAGE;
+
+    nbytes = write(fd, buf, n);
+    printf("get_scope_limits: send %2d bytes:", nbytes);
+    for(n = 0; n < nbytes; n++) {
+        printf(" %02X", buf[n]);
+    }
+    putchar('\n');
+
+    nbytes = read(fd, buf, sizeof(buf));
+    printf("get_scope_limits: read %2d bytes:", nbytes);
+    for(n = 0; n < nbytes; n++) {
+        printf(" %02X", buf[n]);
+    }
+    putchar('\n');
+
+    unsigned long hz100;
+    double        mhz_low, mhz_high;
+    // Decode response.
+    if(7 <= nbytes &&
+       //CONT_ADDR   == buf[nbytes - 4] &&
+       //XCVR_ADDR   == buf[nbytes - 3] &&
+       //OK_CODE     == buf[nbytes - 2] &&
+       END_MESSAGE == buf[nbytes - 1]) {
+       hz100 = BCD2UCHAR(buf[nbytes - 2]) * 10000ul + BCD2UCHAR(buf[nbytes - 3]) * 100ul + BCD2UCHAR(buf[nbytes - 4]); 
+       mhz_high = hz100 * 100.0 / 1000000.0;
+       hz100 = BCD2UCHAR(buf[nbytes - 5]) * 10000ul + BCD2UCHAR(buf[nbytes - 6]) * 100ul + BCD2UCHAR(buf[nbytes - 7]); 
+       mhz_low = hz100 * 100.0 / 1000000.0;
+       printf("mhz_lo = %.4f, mhz_high = %.4f\n", mhz_low, mhz_high);
+    } else {
+        puts("XXX ERROR XXX");
+    }
+}
+
 void print_usage_exit(void)
 {
-    puts("usage: civ [-d|--device /dev/ttyUSBx] [on|off|vd|s|dt]");
+    puts("usage: civ [-d|--device /dev/ttyUSBx] [on|off|vd|s|dt|sl [band edge low_edge high_edge]]");
     puts("  default device is /dev/ttyUSB0, default command is on.");
     puts("  vd reads battery voltage, s reads the S-Meter, dt sets UTC date and time.");
     puts("  Multiple commands can given, however only vd, s, and dt make sense together.");
+    printf("  sl without args will retrieve Bandscope edge frequencies. Bands for sl are:");
+    for(int i = 0; i < sizeof(BAND_TO_SUBCMD_LOOKUP) / sizeof(BAND_TO_SUBCMD_LOOKUP[0]) ; i++) {
+        printf(" %s", BAND_TO_SUBCMD_LOOKUP[i].band);
+    }
+    puts(".\n  low_edge and high_edge are in MHz.");
     exit(1);
 }
