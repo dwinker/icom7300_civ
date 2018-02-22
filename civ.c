@@ -647,14 +647,15 @@ void get_scope_limits(
 
 void print_usage_exit(void)
 {
-    puts("usage: civ [-d|--device /dev/ttyUSBx] [on|off|vd|s|dt|sl [band edge low_edge high_edge]]");
+    puts("usage: civ [-d|--device /dev/ttyUSBx] [on|off|vd|s|dt|sl [band edge [low_edge high_edge]]]");
     puts("  default device is /dev/ttyUSB0, default command is on.");
     puts("  vd reads battery voltage, s reads the S-Meter, dt sets UTC date and time.");
     puts("  Multiple commands can given, however only vd, s, and dt make sense together.");
-    printf("  sl without args will retrieve Bandscope edge frequencies. Bands for sl are:");
+    puts("  sl with just band and edge args will retrieve Bandscope edge frequencies.");
+    printf("    Bands for sl are: ");
     for(int i = 0; i < sizeof(BAND_TO_SUBCMD_LOOKUP) / sizeof(BAND_TO_SUBCMD_LOOKUP[0]) ; i++) {
         printf(" %s", BAND_TO_SUBCMD_LOOKUP[i].band);
     }
-    puts(".\n  low_edge and high_edge are in MHz.");
+    puts(".\n    low_edge and high_edge are in MHz.");
     exit(1);
 }
